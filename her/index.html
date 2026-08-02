@@ -344,18 +344,26 @@ float vane(vec3 lp, float r, float ang, float freq, float twist, float phase, fl
   return sheet * env;
 }
 /* classic five-and-dime cat's-eye: a twisted propeller of opaque coloured
-   glass suspended in clear glass. Two crossed blades plus a narrow milk-white
-   one - the everyday toy-marble mix, not a neon plasma. */
+   glass suspended in clear glass. Colourway matched to the client's reference
+   marble (2026-08-02): one broad pea-green blade dominating, with milk white,
+   a thin vivid orange seam and cobalt stacked beside it.
+
+   The phases are CLUSTERED (0 .. 1.0 rad), not spread evenly around the
+   circle. A real cat's eye is a sandwich of coloured ribbons fused together
+   and twisted, so the blades sit shoulder to shoulder; spacing them evenly
+   reads as a radial fan, which is the giveaway of a fake one. */
 vec3 ribbonField(vec3 lp, float wob, out float dens){
   float r = length(lp);
   float ang = atan(lp.z, lp.x);
-  float v1 = vane(lp, r, ang, 1.0,  1.25, 0.00, 0.078, wob*0.7);
-  float v2 = vane(lp, r, ang, 1.0,  1.25, 1.05, 0.068, wob*0.7);
-  float v3 = vane(lp, r, ang, 1.0,  1.25, 2.09, 0.042, wob*0.7);
-  dens = v1*1.60 + v2*1.45 + v3*1.05;
-  vec3 col = v1*1.60*vec3(0.075, 0.330, 0.980)   // bright cobalt
-           + v2*1.45*vec3(1.000, 0.660, 0.055)   // amber yellow
-           + v3*1.05*vec3(0.960, 0.950, 0.920);  // milk white
+  float v1 = vane(lp, r, ang, 1.0,  1.25, 0.00, 0.082, wob*0.7);  // pea green, the broad one
+  float v2 = vane(lp, r, ang, 1.0,  1.25, 0.46, 0.052, wob*0.7);  // milk white, the separator
+  float v3 = vane(lp, r, ang, 1.0,  1.25, 0.74, 0.028, wob*0.7);  // orange, a thin bright seam
+  float v4 = vane(lp, r, ang, 1.0,  1.25, 1.02, 0.050, wob*0.7);  // cobalt
+  dens = v1*1.60 + v2*1.55 + v3*1.75 + v4*1.60;
+  vec3 col = v1*1.60*vec3(0.330, 0.590, 0.050)
+           + v2*1.55*vec3(0.960, 0.955, 0.925)
+           + v3*1.75*vec3(1.000, 0.185, 0.004)
+           + v4*1.60*vec3(0.008, 0.055, 0.620);
   return dens > 1e-4 ? col / dens : vec3(0.0);
 }
 
