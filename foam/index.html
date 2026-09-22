@@ -187,6 +187,34 @@
   #uibtn .pu { fill: rgba(255,255,255,0.9); }
   body.chrome #uibtn .pu { fill: rgba(0,0,0,0.85); }
 </style>
+<script>
+/* SELF-UPDATE. A single-file app on a static host has one failure mode that
+   actually bites people: the browser keeps the old HTML and there is no way to
+   set cache headers on GitHub Pages, so a shipped fix can sit there unseen.
+   Each page carries the build it was cut from and checks a tiny manifest
+   against it; if the server has moved on, it reloads ONCE through a URL the
+   cache cannot answer. The sessionStorage guard is keyed on the STALE id, so a
+   reload that somehow still serves stale stops instead of looping. The ?b= is
+   deliberately left in the address bar - stripping it would send the next
+   plain reload straight back to the cached copy. */
+(function(){
+  var BUILD = 'd93ccf3dd3';
+  // empty = a standalone bundle with no site to check against; '{' = an
+  // unbuilt source file opened directly. Neither should ever reload.
+  if (!BUILD || BUILD.charAt(0) === '{') return;
+  try { if (sessionStorage.getItem('orb-build') === BUILD) return; } catch (e) {}
+  fetch('/version.json', { cache: 'no-store' })
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(v){
+      if (!v || !v.b || v.b === BUILD) return;
+      try { sessionStorage.setItem('orb-build', BUILD); } catch (e) {}
+      var u = new URL(location.href);
+      u.searchParams.set('b', v.b);
+      location.replace(u.toString());
+    })
+    .catch(function(){});
+})();
+</script>
 </head>
 <body>
 <canvas id="gl"></canvas>
