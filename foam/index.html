@@ -1994,11 +1994,21 @@ void main(){
   /* ---------------- eye tracking: she follows your face ---------------- */
   const gaze = { on: false, x: 0, y: 0, tx: 0, ty: 0, busy: false, det: null, vid: null, stream: null };
   function gazeQuat(yaw, pitch){
-    // small-angle target orientation: gaze axis (local +Z) aimed at your face
+    /* Target orientation: the gaze axis (eye-local +Z) aimed at where you are.
+
+       Watch the handedness here - it is the one thing that will silently make
+       her look AWAY from you. q is uploaded as uRotInv and the shader uses it
+       WORLD->LOCAL ("vec3 ln = uRotInv * N"), so the gaze axis points along the
+       third ROW of R(q) in world space, not the third column. Writing this as
+       the plain local->world yaw-then-pitch rotation mirrors both axes: step
+       right and she steps left with you. So build the conjugate.
+
+       The check that settles it: a rightward drag moves the pupil right ("eye:
+       gaze follows the finger"). Tracking has to agree with the finger. */
     const cy = Math.cos(yaw*0.5),  sy = Math.sin(yaw*0.5);
     const cp = Math.cos(pitch*0.5), sp = Math.sin(pitch*0.5);
-    // yaw about Y, then pitch about X
-    return qNorm([ cy*sp, sy*cp, -sy*sp, cy*cp ]);
+    // conj(yaw about Y, then pitch about X)
+    return qNorm([ -cy*sp, -sy*cp, sy*sp, cy*cp ]);
   }
   const camBtn = document.getElementById('cam');
   async function gazeStart(){
@@ -2054,14 +2064,39 @@ void main(){
       gazeLast = now;
       try {
         const res = gaze.det.detectForVideo(gaze.vid, now);
-        const d = res && res.detections && res.detections[0];
+        const ds = (res && res.detections) || [];
+        // the nearest face wins: whoever fills the most frame is the one at the
+        // screen, so she doesn't dart off to someone walking past behind you
+        let d = null, best = 0;
+        for (const c of ds){
+          const bb = c.boundingBox;
+          const a = bb ? bb.width * bb.height : 0;
+          if (a > best){ best = a; d = c; }
+        }
         if (d){
           const b = d.boundingBox;
           const vw = gaze.vid.videoWidth || 640, vh = gaze.vid.videoHeight || 480;
-          // face centre, normalised, mirrored (front camera is a mirror)
-          const fx = 1 - (b.originX + b.width*0.5)/vw;
-          const fy = (b.originY + b.height*0.45)/vh;   // bias to the eyes, not the chin
-          // offset from centre -> gaze angles. she looks where you actually are.
+          /* BlazeFace returns six keypoints, the two eyes first, normalised 0-1.
+             Aim between them: that is the thing you actually want her to meet,
+             and unlike the box centre it doesn't slide when you open your mouth
+             or drop your chin. The box is the fallback if keypoints go missing. */
+          let ex = (b.originX + b.width*0.5)/vw,
+              ey = (b.originY + b.height*0.45)/vh;
+          const k = d.keypoints;
+          if (k && k.length >= 2 && isFinite(k[0].x) && isFinite(k[1].x)){
+            const mx = (k[0].x + k[1].x)*0.5, my = (k[0].y + k[1].y)*0.5;
+            // trust them only if they land where eyes belong - upper 3/4 of the box
+            if (mx > b.originX/vw && mx < (b.originX + b.width)/vw &&
+                my > b.originY/vh && my < (b.originY + b.height*0.75)/vh){
+              ex = mx; ey = my;
+            }
+          }
+          // mirrored: a front camera sees you as another person would, so
+          // image-left is your right
+          const fx = 1 - ex, fy = ey;
+          /* offset from the frame centre IS the angle you sit at, which is what
+             the eye has to turn through - 1.15 / 0.85 rad across the frame is a
+             ~66 deg webcam. Clamped to a range a real eye can hold. */
           gaze.tx = Math.max(-0.42, Math.min(0.42, (fx - 0.5) * 1.15));
           gaze.ty = Math.max(-0.30, Math.min(0.30, (fy - 0.5) * 0.85));
         }
