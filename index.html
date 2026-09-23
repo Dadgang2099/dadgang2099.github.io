@@ -314,7 +314,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = '2b23638177';
+  var BUILD = 'f466a5f9ce';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -885,7 +885,16 @@ vec3 titleOver(vec3 col, vec2 uv){
   vec2 t = (uv - uTitleRect.xy) / uTitleRect.zw * 0.5 + 0.5;
   if(t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) return col;
   vec4 s = texture(uTitle, vec2(t.x, 1.0 - t.y));
-  return mix(col, s.rgb, s.a);
+  if(s.a <= 0.0) return col;
+  /* the brim throws its shadow across the type as well as the face. Same line
+     the smoke bends around, so the shadow sits exactly where the felt is:
+     deepest right under the edge, lifting as the type gets further from it,
+     and gone on the hat itself, which is lit. Warm, because the fill down
+     there is bounced off his own cheek, not skylight. */
+  float d = (uBrim.x + uBrim.y*uv.x) - uv.y;          // how far BELOW the brim
+  float k = smoothstep(0.34, 0.05, d) * smoothstep(-0.05, 0.02, d);
+  vec3 ink = s.rgb * mix(vec3(1.0), vec3(0.40, 0.34, 0.31), k);
+  return mix(col, ink, s.a);
 }
 
 /* lid aperture: signed masks + boundary distances (world xy on the eyeball) */
@@ -1815,9 +1824,9 @@ void main(){
       x.globalAlpha = 1;
     };
 
-    line('PIPELINE STUDIOS PRESENTS', 84, 0.42, 268, 0.78);
-    line('T.REX', 400, 0.06, 660, 1);
-    line('SOME THINGS DON\u2019T GO EXTINCT', 96, 0.30, 838, 0.84);
+    line('PIPELINE STUDIOS PRESENTS', 80, 0.42, 214, 0.80);
+    line('T.REX', 486, 0.05, 648, 1);
+    line('SOME THINGS DON\u2019T GO EXTINCT', 92, 0.30, 884, 0.86);
 
     titleTex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE3);
@@ -3227,7 +3236,7 @@ void main(){
     gl.uniform1f(U.uTitleOn, titleOn ? 1 : 0);
     if (titleOn){
       const asp = canvas.width / canvas.height;
-      const hw = Math.min(asp * 0.92, 1.05, 0.30 * titleAR);
+      const hw = Math.min(asp * 0.97, 1.06, 0.42 * titleAR);
       const hh = hw / titleAR;
       /* Hang it off the BRIM, not off the top of the frame. The plume is built
          to die 0.22 above the hat's edge - that is the whole point of the brim
@@ -3235,8 +3244,12 @@ void main(){
          the smoke never touches it. Under the brim is where the smoke actually
          runs, and it is still well clear of the iris. Falls back to a fixed
          height for a bare-headed face or a viewport that crops the hat away. */
-      const anchor = brimY < 9e5 ? brimY - 0.03 : 0.62;
-      const cy = Math.min(0.96 - hh, Math.max(hh - 0.10, anchor - hh));
+      /* hung from the brim so it lands in the band between the hat and the
+         eye, which is both where the smoke runs and where the felt's shadow
+         falls. Clamped so it can never climb out of frame or slide onto
+         the iris. */
+      const anchor = brimY < 9e5 ? brimY - 0.02 : 0.60;
+      const cy = Math.min(0.98 - hh, Math.max(hh - 0.28, anchor - hh));
       gl.uniform4f(U.uTitleRect, 0, cy, hw, hh);
     }
     gl.uniform2f(U.uIrisP, FC.irisAng, FC.pup);
