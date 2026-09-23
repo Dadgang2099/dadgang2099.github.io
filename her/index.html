@@ -186,6 +186,122 @@
   body.chrome #uibtn .st { stroke: rgba(0,0,0,0.85); }
   #uibtn .pu { fill: rgba(255,255,255,0.9); }
   body.chrome #uibtn .pu { fill: rgba(0,0,0,0.85); }
+
+  /* ============================================================
+     /tex — the one-sheet. Tex gets a poster laid over him: title,
+     billing block, rating, the lot. Pure DOM over the canvas, no
+     fonts fetched (this file stays self-contained), so the squeezed
+     credit block is faked the way it has always been faked before
+     anyone had the real face: a narrow stack plus a scaleX squeeze.
+     ============================================================ */
+  #poster { display: none; }
+  body.poster #poster {
+    display: block; position: fixed; inset: 0; z-index: 9;
+    pointer-events: none;                    /* the eye stays draggable through it */
+    -webkit-user-select: none; user-select: none;
+    font-synthesis: none;
+    transition: opacity 0.4s ease;
+  }
+  body.poster #facebar { display: none !important; }   /* his own page: no nav off it */
+  body.poster.panel #poster { opacity: 0.18; }         /* get out of the way of the sliders */
+  /* the scrim: a one-sheet always sits the type on a gradient, and it is
+     what keeps small caps legible over a moving image */
+  #poster::before {
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 62%;
+    background: linear-gradient(to bottom,
+      rgba(0,0,0,0) 0%, rgba(0,0,0,0.30) 38%, rgba(0,0,0,0.72) 72%, rgba(0,0,0,0.90) 100%);
+  }
+  #poster::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 0; height: 26%;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.42), rgba(0,0,0,0));
+  }
+  .pWrap {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 0 6vw calc(52px + env(safe-area-inset-bottom));
+    text-align: center; color: #efe9df;
+  }
+  .pPres {
+    font: 400 clamp(7px, 1.9vw, 11px)/1.6 'Copperplate', 'Copperplate Gothic Light', Georgia, serif;
+    letter-spacing: 0.44em; text-indent: 0.44em; text-transform: uppercase;
+    color: rgba(236,228,214,0.74); margin-bottom: clamp(8px, 2.2vw, 16px);
+  }
+  .pTitle {
+    font: 400 clamp(46px, 17.5vw, 150px)/0.92 'Copperplate', 'Copperplate Gothic Bold',
+          'Trajan Pro', Georgia, 'Times New Roman', serif;
+    letter-spacing: 0.06em; text-indent: 0.06em; margin: 0;
+    color: #f5efe4;
+    text-shadow: 0 2px 26px rgba(0,0,0,0.75), 0 0 2px rgba(0,0,0,0.5);
+  }
+  .pTitle i { font-style: normal; letter-spacing: 0.02em; opacity: 0.92; }
+  .pTag {
+    margin: clamp(10px, 2.6vw, 18px) 0 clamp(14px, 3.4vw, 26px);
+    font: 400 clamp(8px, 2.3vw, 13px)/1.5 'Copperplate', Georgia, serif;
+    letter-spacing: 0.34em; text-indent: 0.34em; text-transform: uppercase;
+    color: rgba(232,222,206,0.82);
+  }
+  /* the billing block: the real thing is one very condensed face at one size,
+     everything upper case, no widows. scaleX is how you get there without a font. */
+  .pBill {
+    font: 600 clamp(5.4px, 1.62vw, 10px)/1.72 'Haettenschweiler', 'Arial Narrow',
+          'Helvetica Neue', Helvetica, Arial, sans-serif;
+    letter-spacing: 0.055em; text-transform: uppercase;
+    color: rgba(234,226,212,0.9);
+    transform-origin: 50% 50%;
+    white-space: nowrap;
+  }
+  .pBill p { margin: 0 auto; width: max-content; max-width: none; }
+  .pRow {
+    display: flex; align-items: center; justify-content: center;
+    gap: clamp(9px, 2.6vw, 20px);
+    margin-top: clamp(11px, 2.8vw, 20px);
+  }
+  .pRate {
+    display: flex; align-items: stretch;
+    border: 1.6px solid rgba(238,231,218,0.92);
+    background: rgba(0,0,0,0.30);
+  }
+  .pRate b {
+    font: 700 clamp(15px, 4.4vw, 30px)/1 Helvetica, Arial, sans-serif;
+    padding: clamp(3px,0.9vw,6px) clamp(6px,1.7vw,11px) clamp(2px,0.7vw,5px);
+    color: #f2ece1; letter-spacing: 0;
+    border-right: 1.6px solid rgba(238,231,218,0.92);
+    display: flex; align-items: center;
+  }
+  .pRate s {
+    text-decoration: none; display: flex; align-items: center;
+    padding: 0 clamp(5px,1.5vw,10px);
+    font: 700 clamp(5.6px, 1.5vw, 9px)/1.25 Helvetica, Arial, sans-serif;
+    letter-spacing: 0.14em; color: #f2ece1; text-align: left;
+  }
+  .pWhy {
+    text-align: left; max-width: 46vw;
+    font: 600 clamp(4.8px, 1.32vw, 8px)/1.4 'Arial Narrow', Helvetica, Arial, sans-serif;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: rgba(226,218,204,0.78);
+  }
+  .pMark {
+    display: flex; align-items: center; gap: clamp(4px,1.1vw,8px);
+    font: 700 clamp(5px, 1.34vw, 8px)/1 Helvetica, Arial, sans-serif;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    color: rgba(230,222,208,0.8);
+  }
+  .pMark em {
+    font-style: normal; display: grid; place-items: center;
+    width: clamp(13px,3.4vw,22px); height: clamp(13px,3.4vw,22px);
+    border: 1.4px solid rgba(230,222,208,0.75); border-radius: 50%;
+    font-size: clamp(5px,1.4vw,9px); letter-spacing: 0;
+  }
+  .pFoot {
+    margin-top: clamp(9px, 2.3vw, 16px);
+    font: 600 clamp(5px, 1.42vw, 9px)/1.5 Helvetica, Arial, sans-serif;
+    letter-spacing: 0.3em; text-indent: 0.3em; text-transform: uppercase;
+    color: rgba(224,215,200,0.62);
+  }
+  @media (orientation: landscape) and (max-height: 560px) {
+    .pTitle { font-size: clamp(34px, 11vh, 78px); }
+    .pTag, .pPres { letter-spacing: 0.3em; }
+    .pWrap { padding-bottom: calc(46px + env(safe-area-inset-bottom)); }
+  }
 </style>
 <script>
 /* SELF-UPDATE. A single-file app on a static host has one failure mode that
@@ -198,7 +314,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = 'b587d6ff15';
+  var BUILD = '060b7a883c';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -235,6 +351,26 @@
   <div class="sw" data-bg="5" style="background:linear-gradient(180deg,#0a1450,#12308f)"></div>
   <div class="sw" id="swColor" style="background:conic-gradient(#f44,#ff4,#4f4,#4ff,#44f,#f4f,#f44)"></div>
   <div class="sw up" id="swUpload">+</div>
+</div>
+<!-- /tex: the one-sheet. Hidden unless body.poster (set by the route). -->
+<div id="poster" aria-hidden="true">
+  <div class="pWrap">
+    <div class="pPres">Pipeline Studios presents</div>
+    <h1 class="pTitle">T<i>.</i>REX</h1>
+    <div class="pTag">Some things don&rsquo;t go extinct</div>
+    <div class="pBill">
+      <p>PIPELINE STUDIOS PRESENTS &nbsp;A PIPELINE STUDIOS PRODUCTION &nbsp;&ldquo;T.REX&rdquo;</p>
+      <p>ELLIOT COAKLEY &nbsp;ASHLEY MIDDLETON &nbsp;CASS BROOKSHIDE</p>
+      <p>MUSIC BY CASS BROOKSHIDE &nbsp;EDITED BY ASHLEY MIDDLETON &nbsp;DIRECTOR OF PHOTOGRAPHY ELLIOT COAKLEY</p>
+      <p>PRODUCED BY ASHLEY MIDDLETON &nbsp;WRITTEN BY CASS BROOKSHIDE &nbsp;DIRECTED BY ELLIOT COAKLEY</p>
+    </div>
+    <div class="pRow">
+      <div class="pRate"><b>R</b><s>RESTRICTED</s></div>
+      <div class="pWhy">Under 17 requires accompanying<br>parent or adult guardian</div>
+      <div class="pMark"><em>PS</em>Pipeline Studios</div>
+    </div>
+    <div class="pFoot">fidgetspinner.ai &nbsp;&middot;&nbsp; coming soon</div>
+  </div>
 </div>
 <div id="facebar">
   <div class="fc on" data-fc="0">Her</div>
@@ -1714,7 +1850,15 @@ void main(){
     if (solo && MAP[solo] !== undefined){
       document.body.classList.add('solo');
       const lockFace = FMAP[faceName];
-      if (lockFace !== undefined || /[?&]bare=1/.test(location.search)){
+      const embed = /[?&]bare=1/.test(location.search);
+      /* /tex is the one-sheet: Tex keeps his controls but loses every way OFF
+         him - no scene tabs (solo does that) and no face bar (body.poster does)
+         - and wears the poster. Every other face route stays a bare embed.
+         Matched on the PATH, so a standalone ?face= or __ORB_LOCK_FACE__ build
+         is still a clean embed with no poster over it. */
+      if (!embed && /\/tex\/?$/.test(path)){
+        document.body.classList.add('poster');
+      } else if (lockFace !== undefined || embed){
         document.body.classList.add('bare');   // face route: pure eye, no controls
       }
       // defer to a frame so the whole script has parsed (setFace touches
@@ -2081,6 +2225,24 @@ void main(){
     if (gaze.det){ try { gaze.det.close(); } catch(e){} gaze.det = null; }
     gaze.x = gaze.y = gaze.tx = gaze.ty = 0;
   }
+  /* The billing block is one condensed face set to the width of the sheet —
+     no wrapping, no widows, the longest line touching both margins. Without
+     the real typeface the only way there is to measure and squeeze, so that
+     is what this does: widest line against the frame, once per layout. */
+  function fitBill(){
+    const b = document.querySelector('#poster .pBill');
+    if (!b || !b.offsetParent) return;
+    b.style.transform = 'none';
+    let w = 0;
+    for (const line of b.children) w = Math.max(w, line.scrollWidth);
+    const room = b.clientWidth;
+    if (!w || !room) return;
+    b.style.transform = 'scaleX(' + Math.max(0.40, Math.min(1, room / w)) + ')';
+  }
+  addEventListener('resize', fitBill);
+  addEventListener('orientationchange', () => setTimeout(fitBill, 120));
+  requestAnimationFrame(() => requestAnimationFrame(fitBill));
+
   camBtn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     gaze.on || gaze.busy ? gazeStop() : gazeStart();
