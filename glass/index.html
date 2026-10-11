@@ -327,7 +327,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = '2e288996fd';
+  var BUILD = '59bfb910e3';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -674,7 +674,7 @@ uniform float uDisp;      // dispersion gain, 1 = physical
 uniform vec4  uBPoke[3];  // touch: xyz = dent axis (unit), w = depth
 uniform vec4  uBPokeB[3]; // x = ripple amp, y = ripple age (s), z = angular radius
 uniform vec4  uBeadMode;  // the four l=2 surface-tension amplitudes, this frame
-uniform vec4  uMote[20];  // dust: xyz = position in the drop (unit ball), w = radius
+uniform vec4  uMote[48];  // dust: xyz = position in the drop (unit ball), w = radius
 /* Quality tier. MOBILE FIRST: the scene boots on the cheap path on every
    device, and only swaps up once it has proved it can afford the expensive
    one. Nothing here changes what the bead IS - same physics, same tables -
@@ -776,16 +776,32 @@ float beadDust(vec3 A, vec3 B){
   float len = length(d);
   if(len < 1e-5) return 0.0;
   vec3 dir = d / len;
+  float pxW = 1.944 / uRes.y;                 // world units per pixel at the bead
   float acc = 0.0;
   for(int i = 0; i < uMoteN; i++){
     vec4 m = uMote[i];
     // local -> world: v * M is transpose(M) * v, and uRotInv is world -> local
     vec3 rel = (m.xyz * uRotInv) * uRadius - A;
     float t = clamp(dot(rel, dir), 0.0, len);
-    float r = length(rel - dir*t) / (uRadius * m.w);
-    acc += exp(-r*r*2.3);
+    /* These are FLECKS - most of them are smaller than a pixel, which a
+       plain gaussian cannot draw: it lands between sample points and the mote
+       flickers as it drifts. So the spot is never allowed thinner than about
+       a pixel, and its brightness drops by the area it lost, which is what a
+       real sub-pixel speck does anyway - it does not vanish, it just dims.
+       Energy is the thing to conserve here, not radius.
+
+       The falloff is ^1.25, not the ^2 strict area conservation. On a phone
+       the bead is only ~190 px across, so the smallest flecks are a fifth of
+       a pixel and true area scaling takes them to 5% brightness - gone, on the
+       device that matters most. 1.25 keeps the big ones clearly brighter than
+       the small ones, which is the random-scale look, without the bottom of
+       the distribution disappearing. A legibility choice, not physics. */
+    float rw = uRadius * m.w;                 // what the mote actually is
+    float re = max(rw, pxW * 0.85);           // what can be drawn
+    float r  = length(rel - dir*t) / re;
+    acc += exp(-r*r*2.3) * pow(rw/re, 1.25);
   }
-  return min(acc, 1.6);
+  return min(acc, 1.2);
 }
 
 /* A finger in water. The dent is a gaussian pressed along one axis; the water
@@ -938,7 +954,7 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
 
   vec3 col = mix(body*0.92, spec, F);
   // the motes sit in the body, lit by the room and dimmed by the film above them
-  col += dust * vec3(0.96, 0.98, 1.0) * 0.30 * (1.0 - F);
+  col += dust * vec3(0.96, 0.98, 1.0) * 1.35 * (1.0 - F);
 
   // water is thin and bright at the edge, not dense like glass
   float rim = pow(1.0 - cosI, 4.0);
@@ -3127,8 +3143,8 @@ void main(){
      makes the bead visibly change grade whenever something else on the machine
      gets busy, which is worse than simply being coarse. */
   const BEAD_Q = {
-    lo: { specN: 5, skip: 2, inv: [0.618793, 0.601488, 0.813906], steps: 36, motes: 12 },
-    hi: { specN: 9, skip: 1, inv: [0.302917, 0.302091, 0.317804], steps: 52, motes: 20 },
+    lo: { specN: 5, skip: 2, inv: [0.618793, 0.601488, 0.813906], steps: 36, motes: 28 },
+    hi: { specN: 9, skip: 1, inv: [0.302917, 0.302091, 0.317804], steps: 52, motes: 48 },
   };
   // ?q=hi / ?q=lo pins a tier, for grading the two against each other
   const qPin = (location.search.match(/[?&]q=(hi|lo)/) || [])[1];
@@ -3154,7 +3170,7 @@ void main(){
      after watching a while, which is the whole character of dust in water.
      Anything that leaves the ball is respawned at the top rather than
      reflected: a mote bouncing off the inside of the surface reads as a bug. */
-  const MOTES = 20;
+  const MOTES = 48;
   const moteArr = new Float32Array(MOTES * 4);
   const motes = [];
   for (let i = 0; i < MOTES; i++){
@@ -3164,7 +3180,12 @@ void main(){
     while (x*x + y*y + z*z > 1);
     const s = 0.86;
     motes.push({ x: x*s, y: y*s, z: z*s,
-                 r: 0.010 + Math.random()*0.016,
+                 /* Tiny, and tiny in a RANDOM way: a squared distribution
+                    puts most flecks at the floor and lets a few be several
+                    times bigger, which is what a suspension looks like. The
+                    old 0.010-0.026 was 6-16 px on a phone - beads of oil, not
+                    dust. This is 0.3-2.4 px. */
+                 r: 0.0010 + 0.0055*Math.pow(Math.random(), 2.0),
                  vy: -(0.006 + Math.random()*0.012),
                  ph: Math.random()*6.283, sp: 0.19 + Math.random()*0.33 });
   }
