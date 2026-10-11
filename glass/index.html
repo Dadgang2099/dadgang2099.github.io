@@ -325,7 +325,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = '7dce22be42';
+  var BUILD = '5515e14df5';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -669,26 +669,34 @@ uniform sampler2D uVid;   // live camera, equirect-wrapped onto the bead
 uniform float uVidOn;
 uniform float uFilm;      // thin-film strength 0..1
 uniform float uDisp;      // dispersion gain, 1 = physical
+uniform vec4  uBPoke[3];  // touch: xyz = dent axis (unit), w = depth
+uniform vec4  uBPokeB[3]; // x = ripple amp, y = ripple age (s), z = angular radius
+uniform vec4  uBeadMode;  // the four l=2 surface-tension amplitudes, this frame
+const int MOTE_N = 20;
+uniform vec4  uMote[20];  // dust: xyz = position in the drop (unit ball), w = radius
 
-/* CIE 1931 colour matching, multi-lobe gaussian fit (Wyman, Sloan & Shirley) */
-float cieG(float x, float m, float s1, float s2){
-  float t = (x - m) * (x < m ? 1.0/s1 : 1.0/s2);
-  return exp(-0.5*t*t);
-}
-vec3 cieXYZ(float l){
-  return vec3(
-    1.056*cieG(l,599.8,37.9,31.0) + 0.362*cieG(l,442.0,16.0,26.7) - 0.065*cieG(l,501.1,20.4,26.2),
-    0.821*cieG(l,568.8,46.9,40.5) + 0.286*cieG(l,530.9,16.3,31.1),
-    1.217*cieG(l,437.0,11.8,36.0) + 0.681*cieG(l,459.0,26.0,13.8));
-}
+/* The spectral sample set, BAKED. The CIE 1931 colour-matching weights are the
+   Wyman/Sloan/Shirley multi-lobe gaussian fit, and SP_K is water's Cauchy index
+   (n = 1.3239 + 3141/lambda^2) minus the green index, so the dispersed index is
+   just 1.333 + SP_K[i]*uDisp. Both are constant per wavelength, and evaluating
+   them live cost 7 exp and a divide EACH, nine times a pixel - which is most of
+   why the first version of this scene could not hold a frame rate. Regenerate
+   with the snippet in NOTES if the band or the count changes. */
+const int SPECTRAL_N = 9;
+const vec3  SP_C[9] = vec3[9](
+  vec3(0.09776, 0.00410, 0.42867), vec3(0.35003, 0.03032, 1.78420),
+  vec3(0.09596, 0.14225, 0.78644), vec3(0.02759, 0.55642, 0.13313),
+  vec3(0.35551, 0.97988, 0.01352), vec3(0.88335, 0.89776, 0.00062),
+  vec3(1.00610, 0.50797, 0.00001), vec3(0.42423, 0.16322, 0.00000),
+  vec3(0.06072, 0.02834, 0.00000));
+const float SP_L[9] = float[9](416.1, 448.3, 480.6, 512.8, 545.0, 577.2, 609.4, 641.7, 673.9);
+const float SP_K[9] = float[9](0.009041, 0.006527, 0.004501, 0.002846, 0.001475,
+                               0.000327, -0.000643, -0.001471, -0.002183);
+const vec3  SP_INV = vec3(0.302917, 0.302091, 0.317804);   // 1 / sum(SP_C)
 vec3 xyzToRgb(vec3 c){
   return vec3( 3.2406*c.x - 1.5372*c.y - 0.4986*c.z,
               -0.9689*c.x + 1.8758*c.y + 0.0415*c.z,
                0.0557*c.x - 0.2040*c.y + 1.0570*c.z);
-}
-float waterIOR(float lam){
-  float n = 1.3239 + 3141.0/(lam*lam);
-  return 1.333 + (n - 1.333) * uDisp;      // exaggerate about the green index
 }
 
 /* the environment the bead looks at: the lightbox, plus the camera when it is
@@ -702,10 +710,12 @@ vec3 beadEnv(vec3 d){
      edged panels, because dispersion only shows on an EDGE. A smooth gradient,
      however bright, splits into nothing. The camera replaces this when it is
      on, and it is built to preview what that will look like. */
-  // ripple the lookup so the panels read as a room rather than as three
-  // rectangles - the edges stay hard enough to disperse, they just stop being
-  // straight
-  d = normalize(d + 0.055*vec3(noise3(d*3.1), noise3(d*3.1 + 7.7), noise3(d*3.1 + 19.3)) - 0.0275);
+  /* bend the lookup so the panels read as a room rather than as three
+     rectangles - the edges stay hard enough to disperse, they just stop being
+     straight. This used to be three noise3 calls, which the spectral loop then
+     paid for nine times over; trig is a tenth of the price and the shapes it
+     makes are just as crooked. */
+  d = normalize(d + 0.07*vec3(sin(d.y*5.1 + d.z*3.3), sin(d.z*4.3 + d.x*5.7), sin(d.x*4.9 + d.y*3.9)));
   vec3 c = vec3(0.008, 0.010, 0.014);
   float box  = smoothstep(0.28, 0.44, d.y) * smoothstep(0.80, 0.52, abs(d.x));
   c += box * vec3(0.50, 0.54, 0.62);                       // overhead softbox
@@ -713,8 +723,10 @@ vec3 beadEnv(vec3 d){
   c += warm * vec3(1.10, 0.62, 0.24) * 0.34;               // warm panel, low left
   float cool = smoothstep(0.18, 0.52, d.x) * smoothstep(0.62, 0.16, abs(d.y - 0.12));
   c += cool * vec3(0.24, 0.50, 1.15) * 0.28;               // cool rake, right
-  // small brilliants: points for the dispersion to prise apart
-  c += smoothstep(0.88, 0.995, noise3(d*7.0 + 11.3)) * vec3(1.0, 0.98, 0.95) * 1.1;
+  /* There used to be a scatter of small brilliants here, as points for the
+     dispersion to prise apart. They landed as specks sitting ON the surface
+     and read as scratches, which water does not have. The sparkle is motes
+     INSIDE the drop now (beadDust) - same job, right side of the glass. */
   return c;
 }
 vec3 envAt(vec3 d){
@@ -729,32 +741,98 @@ vec3 envAt(vec3 d){
   return beadEnv(d);
 }
 
+/* Motes suspended IN the water. They are sampled along the INTERNAL ray, so
+   the drop's own lens magnifies and displaces them exactly as it does
+   everything else behind its front face - which is the only reason they read
+   as inside it rather than printed on it. They ride uRotInv, so rolling the
+   bead turns the dust with it. */
+float beadDust(vec3 A, vec3 B){
+  /* Motes are POINTS, tested against the ray - not a noise field sampled along
+     it. Twice I tried the field and twice it came out as a surface defect
+     rather than a suspension: at frequency 9 it read as sensor grain over the
+     whole drop, and at 3.4 as grey smudges on the glass. The reason is the
+     march - nine steps across a drop cannot resolve anything small, so a small
+     mote aliases and a large one is a cloud. A ray-point distance has no
+     sampling in it at all: the mote has a clean round edge at any size, it
+     costs one dot product, and the positions can drift on the CPU where
+     wrapping them inside the drop is three lines instead of a noise warp. */
+  vec3 d = B - A;
+  float len = length(d);
+  if(len < 1e-5) return 0.0;
+  vec3 dir = d / len;
+  float acc = 0.0;
+  for(int i = 0; i < MOTE_N; i++){
+    vec4 m = uMote[i];
+    // local -> world: v * M is transpose(M) * v, and uRotInv is world -> local
+    vec3 rel = (m.xyz * uRotInv) * uRadius - A;
+    float t = clamp(dot(rel, dir), 0.0, len);
+    float r = length(rel - dir*t) / (uRadius * m.w);
+    acc += exp(-r*r*2.3);
+  }
+  return min(acc, 1.6);
+}
+
+/* A finger in water. The dent is a gaussian pressed along one axis; the water
+   it displaces has to GO somewhere, so a bulge rings it - that volume balance
+   is most of what separates a dent in water from a dent in rubber. Let go and
+   it does not just return: it overshoots, and a capillary ring runs out across
+   the surface and dies. Keep the amplitudes small - this is added straight
+   into the SDF, and a steep one makes the sphere-trace overshoot its own
+   surface. */
+float beadDent(vec3 n){
+  float d = 0.0;
+  for(int i = 0; i < 3; i++){
+    vec4  P = uBPoke[i];
+    vec3  B = uBPokeB[i].xyz;
+    float rad = max(B.z, 1e-3);
+    if(abs(P.w) < 1e-5 && B.x < 1e-5) continue;
+    float ang = acos(clamp(dot(n, P.xyz), -1.0, 1.0));
+    d -= P.w * exp(-(ang*ang)/(rad*rad));                        // the press
+    float br = (ang - rad*1.5) / (rad*0.8);
+    d += P.w * 0.36 * exp(-br*br);                               // displaced water
+    if(B.x > 1e-5){                                              // capillary ring
+      float front = B.y * 2.5;
+      float ew = (ang - front) / 0.40;
+      d += B.x * exp(-ew*ew) * cos((ang - front) * 6.5);
+    }
+  }
+  return d;
+}
+
 /* l=2 surface-tension modes - how a real drop rings. Amplitudes stay ~2% or it
    stops reading as water held by its own surface and starts reading as jelly. */
 float beadD(vec3 p){
   float r = length(p);
   vec3 n = p / max(r, 1e-5);
-  float w = 0.0070*sin(uTime*1.10)       * (3.0*n.y*n.y - 1.0)
-          + 0.0052*sin(uTime*0.83 + 1.7) * (n.x*n.x - n.z*n.z)
-          + 0.0040*sin(uTime*1.47 + 0.4) * (n.x*n.z)
-          + 0.0026*sin(uTime*1.91 + 2.3) * (n.y*n.z);
-  return r - uRadius*(1.0 + w);
+  /* the four mode amplitudes are the same for every pixel in the frame, so
+     they arrive as a uniform. Computed in here they were four sin() calls
+     inside a function the march runs ~50 times per pixel. */
+  float w = uBeadMode.x * (3.0*n.y*n.y - 1.0)
+          + uBeadMode.y * (n.x*n.x - n.z*n.z)
+          + uBeadMode.z * (n.x*n.z)
+          + uBeadMode.w * (n.y*n.z);
+  return r - uRadius*(1.0 + w + beadDent(n));
 }
 vec3 beadN(vec3 p){
-  vec2 e = vec2(uRadius*0.004, 0.0);
-  return normalize(vec3(beadD(p+e.xyy) - beadD(p-e.xyy),
-                        beadD(p+e.yxy) - beadD(p-e.yxy),
-                        beadD(p+e.yyx) - beadD(p-e.yyx)));
+  // tetrahedral differencing: four taps for a gradient instead of six
+  const vec2 k = vec2(1.0, -1.0);
+  float e = uRadius*0.004;
+  return normalize(k.xyy*beadD(p + k.xyy*e) + k.yyx*beadD(p + k.yyx*e) +
+                   k.yxy*beadD(p + k.yxy*e) + k.xxx*beadD(p + k.xxx*e));
 }
 
 vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
   /* march the wobble inside the bounding sphere */
+  /* 0.70 of the distance per step, not all of it: beadD is r minus a radius
+     that the dent and the ripple both bend, so it over-reports how far the
+     surface is wherever that bend is steep, and a full step walks through it.
+     The tell is a bite missing out of the dent's near rim. */
   float t = tNear;
   bool hit = false;
-  for(int i = 0; i < 48; i++){
+  for(int i = 0; i < 52; i++){
     float d = beadD(ro + rd*t);
     if(d < uRadius*0.0012){ hit = true; break; }
-    t += d;
+    t += d*0.70;
     if(t > tFar) break;
   }
   if(!hit) return vec3(0.0);
@@ -777,12 +855,22 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
 
   /* one spectral loop does both jobs: interference in the film, and a
      dispersed ray through the body of the drop. */
-  const int SPECTRAL_N = 14;
-  vec3 xyzFilm = vec3(0.0), xyzBody = vec3(0.0), wsum = vec3(0.0);
+  /* the green ray carries the dust and sets where the interior is sampled -
+     motes are achromatic, so paying for them 14 times over would buy nothing */
+  float dust = 0.0;
+  {
+    vec3 rG = refract(rd, N, 1.0/1.333);
+    if(dot(rG, rG) > 0.0){
+      float bg2 = dot(P, rG);
+      float cg2 = dot(P, P) - uRadius*uRadius;
+      dust = beadDust(P, P + rG*(-bg2 + sqrt(max(bg2*bg2 - cg2, 0.0))));
+    }
+  }
+
+  vec3 xyzFilm = vec3(0.0), xyzBody = vec3(0.0);
   for(int i = 0; i < SPECTRAL_N; i++){
-    float lam = 400.0 + (690.0 - 400.0) * (float(i) + 0.5) / float(SPECTRAL_N);
-    vec3  cm  = cieXYZ(lam);
-    wsum += cm;
+    float lam = SP_L[i];
+    vec3  cm  = SP_C[i];
 
     // thin film: pi flip at the top face only, so zero thickness is dark
     float inten = 0.5 - 0.5*cos(6.2831853*opd/lam);
@@ -794,7 +882,7 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
     float trans = 1.0 - inten * uFilm * 0.80;
 
     // body: in one face, straight across, out the other, then look
-    float n = waterIOR(lam);
+    float n = 1.333 + SP_K[i]*uDisp;
     vec3 rIn = refract(rd, N, 1.0/n);
     float lamCol = 0.0;
     if(dot(rIn, rIn) > 0.0){
@@ -811,14 +899,13 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
          it, focused hard. Against a void that is three small lights, so what
          you get is a few brilliant points, prised apart by wavelength. Gain
          it up or a bead on black is just a black disc with a wet edge. */
-      vec3 s = envAt(rOut) * 2.0;
+      vec3 s = envAt(rOut) * 3.4;
       lamCol = dot(s, vec3(0.299, 0.587, 0.114));
     }
     xyzBody += cm * lamCol * trans;
   }
-  vec3 inv = 1.0 / max(wsum, vec3(1e-4));
-  vec3 film = max(xyzToRgb(xyzFilm * inv), 0.0);
-  vec3 body = max(xyzToRgb(xyzBody * inv), 0.0);
+  vec3 film = max(xyzToRgb(xyzFilm * SP_INV), 0.0);
+  vec3 body = max(xyzToRgb(xyzBody * SP_INV), 0.0);
 
   /* the film's own reflectance climbs with incidence the same way the surface
      does, so the spectrum lives in the rim and the facing crown stays clear -
@@ -833,6 +920,8 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
   vec3 spec = mix(refl, film * rl * 3.6, filmAmt);
 
   vec3 col = mix(body*0.92, spec, F);
+  // the motes sit in the body, lit by the room and dimmed by the film above them
+  col += dust * vec3(0.96, 0.98, 1.0) * 0.30 * (1.0 - F);
 
   // water is thin and bright at the edge, not dense like glass
   float rim = pow(1.0 - cosI, 4.0);
@@ -1908,8 +1997,8 @@ void main(){
   } else {
     /* ---------------- BEAD ---------------- */
     col = vec3(0.0);                       // pure black, same void as the marble
-    // bound the march: the wobble never exceeds 2% of R
-    float cB = dot(ro, ro) - uRadius*uRadius*1.0609;
+    // bound the march wide enough for the dent's displaced-water bulge
+    float cB = dot(ro, ro) - uRadius*uRadius*1.2769;
     float dB = b*b - cB;
     if(dB > 0.0){
       float sq = sqrt(dB);
@@ -1954,7 +2043,7 @@ void main(){
 
   const U = {};
   ['uRes','uTime','uRadius','uRotInv','uRoll','uMode','uLid','uSquint','uPupil','uNB','uNP',
-   'uPhoto','uMatte','uPhotoOn','uPhotoC','uPhotoS','uNPk','uBg','uTear','uTearRub','uBgColor','uBgTex','uBgMap','uBgLod','uBreath','uEyeOff','uTearDry','uTearC','uEyeGrade','uIris1','uIris2','uSclera','uGlowC','uWarm','uShadeP','uIrisP','uSmoke','uBrim','uTitle','uTitleRect','uTitleOn','uVid','uVidOn','uFilm','uDisp']
+   'uPhoto','uMatte','uPhotoOn','uPhotoC','uPhotoS','uNPk','uBg','uTear','uTearRub','uBgColor','uBgTex','uBgMap','uBgLod','uBreath','uEyeOff','uTearDry','uTearC','uEyeGrade','uIris1','uIris2','uSclera','uGlowC','uWarm','uShadeP','uIrisP','uSmoke','uBrim','uTitle','uTitleRect','uTitleOn','uVid','uVidOn','uFilm','uDisp','uBeadMode']
     .forEach(n => U[n] = gl.getUniformLocation(prog, n));
   U.uMk = gl.getUniformLocation(prog, 'uMk[0]');
   U.uWave = gl.getUniformLocation(prog, 'uWave');
@@ -1964,6 +2053,9 @@ void main(){
   U.uB    = gl.getUniformLocation(prog, 'uB[0]');
   U.uPop  = gl.getUniformLocation(prog, 'uPop[0]');
   U.uPoke = gl.getUniformLocation(prog, 'uPoke[0]');
+  U.uBPoke  = gl.getUniformLocation(prog, 'uBPoke[0]');
+  U.uBPokeB = gl.getUniformLocation(prog, 'uBPokeB[0]');
+  U.uMote   = gl.getUniformLocation(prog, 'uMote[0]');
 
   /* ---------------- faces: five plates, five mattes, five eye recipes ---------------- */
   const FACES = [
@@ -2899,6 +2991,13 @@ void main(){
       lastInput = performance.now(); hintGone();
       return;
     }
+    if (mode === 4){
+      const ux = (2*e.clientX - window.innerWidth)  / window.innerHeight;
+      const uy = (window.innerHeight - 2*e.clientY) / window.innerHeight;
+      bActive = beadPokeStart(ux, uy);
+      lastInput = performance.now(); hintGone();
+      if (bActive) return;        // a miss falls through and rolls it instead
+    }
     if (mode === 1 && photoOn){
       const ux = (2*e.clientX - window.innerWidth)  / window.innerHeight;
       const uy = (window.innerHeight - 2*e.clientY) / window.innerHeight;
@@ -2930,6 +3029,15 @@ void main(){
       lastInput = performance.now();
       return;
     }
+    if (bActive && bActive.held){
+      // the dent follows the finger round the surface; off the edge it stays
+      // put at the silhouette rather than snapping to the far side
+      const n = beadHit((2*e.clientX - window.innerWidth)  / window.innerHeight,
+                        (window.innerHeight - 2*e.clientY) / window.innerHeight);
+      if (n) bActive.n = n;
+      lastInput = performance.now();
+      return;
+    }
     if (activePoke && activePoke.held){
       activePoke.x = (2*e.clientX - window.innerWidth)  / window.innerHeight;
       activePoke.y = (window.innerHeight - 2*e.clientY) / window.innerHeight;
@@ -2958,12 +3066,114 @@ void main(){
   });
   const release = () => {
     maskC.grab = -1;
+    if (bActive){
+      // the dent's depth at release becomes the ring's amplitude: the water
+      // that was held down is what drives the wave out
+      bActive.held = false; bActive.age = 0;
+      bActive.rip = Math.max(bActive.amp, 0) * 0.22;
+      bActive = null;
+    }
     if (activePoke){ activePoke.held = false; activePoke.vel = -4.0; activePoke = null; }
     eyeOff.held = false;
     dragging = false; press(false);
   };
   window.addEventListener('pointerup', release);
   window.addEventListener('pointercancel', release);
+
+  /* ---------------- the dust inside the bead ----------------
+     Twenty motes drifting in the drop's own frame, so rolling the bead carries
+     them with it. They settle downward at a few thousandths of a radius per
+     second with a slow lateral wander - slow enough that you notice it only
+     after watching a while, which is the whole character of dust in water.
+     Anything that leaves the ball is respawned at the top rather than
+     reflected: a mote bouncing off the inside of the surface reads as a bug. */
+  const MOTES = 20;
+  const moteArr = new Float32Array(MOTES * 4);
+  const motes = [];
+  for (let i = 0; i < MOTES; i++){
+    // rejection-sample the ball; a cube mapped onto it crowds the corners
+    let x, y, z;
+    do { x = Math.random()*2-1; y = Math.random()*2-1; z = Math.random()*2-1; }
+    while (x*x + y*y + z*z > 1);
+    const s = 0.86;
+    motes.push({ x: x*s, y: y*s, z: z*s,
+                 r: 0.010 + Math.random()*0.016,
+                 vy: -(0.006 + Math.random()*0.012),
+                 ph: Math.random()*6.283, sp: 0.19 + Math.random()*0.33 });
+  }
+  function moteStep(dt, t){
+    for (let i = 0; i < MOTES; i++){
+      const m = motes[i];
+      m.y += m.vy * dt;
+      m.x += Math.sin(t*m.sp + m.ph) * 0.0045 * dt * 60 * 0.016;
+      m.z += Math.cos(t*m.sp*0.83 + m.ph) * 0.0045 * dt * 60 * 0.016;
+      if (m.y < -0.86 || m.x*m.x + m.y*m.y + m.z*m.z > 0.86*0.86){
+        const a = Math.random()*6.283, rr = Math.sqrt(Math.random())*0.72;
+        m.x = Math.cos(a)*rr; m.z = Math.sin(a)*rr; m.y = 0.80;
+      }
+      moteArr[i*4] = m.x; moteArr[i*4+1] = m.y; moteArr[i*4+2] = m.z; moteArr[i*4+3] = m.r;
+    }
+    gl.uniform4fv(U.uMote, moteArr);
+  }
+
+  /* ---------------- bead touch: a finger in water ----------------
+     Flesh and water are both springs, and the difference between them is the
+     damping ratio. The eye's skin is nearly critically damped - it was tuned
+     for FIRMER, less elastic (HANDOFF). Water is the opposite: zeta = 0.21
+     here, so letting go overshoots and rings several times before it settles.
+     On release the dent's depth is handed to a capillary ring that runs out
+     across the surface and dies, which is the part the eye actually reads as
+     liquid. */
+  const bPokes = [];
+  const bPokeArr = new Float32Array(12), bPokeArrB = new Float32Array(12);
+  let bActive = null;
+  function beadHit(ux, uy){
+    /* the same camera the shader uses, so the dent lands under the finger.
+       Returns the unit axis of the dent, or null if the ray missed. */
+    const rd = [ux*0.27, uy*0.27, -1];
+    const L = Math.hypot(rd[0], rd[1], rd[2]);
+    rd[0] /= L; rd[1] /= L; rd[2] /= L;
+    const b = 3.6 * rd[2];                       // dot(ro, rd), ro = (0,0,3.6)
+    const c = 3.6*3.6 - radius*radius;
+    const disc = b*b - c;
+    if (disc <= 0) return null;
+    const t = -b - Math.sqrt(disc);
+    const P = [rd[0]*t, rd[1]*t, 3.6 + rd[2]*t];
+    const pl = Math.hypot(P[0], P[1], P[2]) || 1;
+    return [P[0]/pl, P[1]/pl, P[2]/pl];
+  }
+  function beadPokeStart(ux, uy){
+    const n = beadHit(ux, uy);
+    if (!n) return null;
+    const p = { n, amp: 0, vel: 0, rad: 0.38, rip: 0, age: 0, held: true };
+    bPokes.push(p);
+    if (bPokes.length > 3) bPokes.shift();
+    return p;
+  }
+  function beadPokeStep(dt){
+    for (let i = bPokes.length - 1; i >= 0; i--){
+      const p = bPokes[i];
+      const tgt = p.held ? 0.125 : 0;
+      // K 430, C 8.4 -> 3.3 Hz, zeta 0.20: it rings rather than returning
+      p.vel += ((tgt - p.amp) * 430 - p.vel * 8.4) * dt;
+      p.amp += p.vel * dt;
+      if (!p.held){
+        p.age += dt;
+        p.rip *= Math.exp(-dt * 1.35);           // the ring outruns itself and dies
+        if (p.age > 3.2 && Math.abs(p.amp) < 0.0006 && p.rip < 0.0006) bPokes.splice(i, 1);
+      }
+    }
+    bPokeArr.fill(0); bPokeArrB.fill(0);
+    for (let i = 0; i < bPokes.length && i < 3; i++){
+      const p = bPokes[i];
+      bPokeArr[i*4]   = p.n[0]; bPokeArr[i*4+1] = p.n[1];
+      bPokeArr[i*4+2] = p.n[2]; bPokeArr[i*4+3] = p.amp;
+      bPokeArrB[i*4]  = p.rip;  bPokeArrB[i*4+1] = p.age;
+      bPokeArrB[i*4+2] = p.rad;
+    }
+    gl.uniform4fv(U.uBPoke,  bPokeArr);
+    gl.uniform4fv(U.uBPokeB, bPokeArrB);
+  }
 
   /* ---------------- poke physics: flesh as a damped spring ---------------- */
   const pokes = [];
@@ -3469,6 +3679,12 @@ void main(){
          a prism to put them. Both are honest about being a choice. */
       gl.uniform1f(U.uFilm, 0.85);
       gl.uniform1f(U.uDisp, 7.0);
+      const bt = now / 1000;
+      gl.uniform4f(U.uBeadMode,
+        0.0070*Math.sin(bt*1.10),       0.0052*Math.sin(bt*0.83 + 1.7),
+        0.0040*Math.sin(bt*1.47 + 0.4), 0.0026*Math.sin(bt*1.91 + 2.3));
+      beadPokeStep(dt);
+      moteStep(dt, bt);
     } else {
       gl.uniform1f(U.uVidOn, 0);
     }
