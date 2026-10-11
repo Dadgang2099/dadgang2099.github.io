@@ -136,6 +136,8 @@
   #cam svg { width: 19px; height: 19px; }
   #cam .cs { fill: none; stroke: rgba(255,255,255,0.72); stroke-width: 1.5; stroke-linejoin: round; }
   #cam.on { background: rgba(255,255,255,0.92); border-color: #fff; }
+  /* rear camera: same button, a tint so you can tell which one is live */
+  #cam.on.rear { background: rgba(150,205,255,0.92); border-color: rgba(190,225,255,0.95); }
   #cam.on .cs { stroke: rgba(0,0,0,0.85); }
   #cam.busy { opacity: 0.5; }
   #panel {
@@ -325,7 +327,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = '5515e14df5';
+  var BUILD = '2e288996fd';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -651,7 +653,7 @@ vec3 shadeMarble(vec3 ro, vec3 rd, float tHit, float tExit){
      phase flip at the air/film face, over a thickness that drains downward
      under gravity and drifts. 180-900 nm covers the saturated low orders.
 
-   Both are evaluated in ONE loop over SPECTRAL_N wavelengths and converted to
+   Both are evaluated in ONE loop over the spectral samples and converted to
    RGB through the CIE 1931 observer, so the colour is derived rather than
    painted. The CIE fit is the Wyman/Sloan/Shirley multi-lobe gaussian. Paint
    the spectrum as a hue ramp instead and the bands come out evenly spaced,
@@ -672,8 +674,16 @@ uniform float uDisp;      // dispersion gain, 1 = physical
 uniform vec4  uBPoke[3];  // touch: xyz = dent axis (unit), w = depth
 uniform vec4  uBPokeB[3]; // x = ripple amp, y = ripple age (s), z = angular radius
 uniform vec4  uBeadMode;  // the four l=2 surface-tension amplitudes, this frame
-const int MOTE_N = 20;
 uniform vec4  uMote[20];  // dust: xyz = position in the drop (unit ball), w = radius
+/* Quality tier. MOBILE FIRST: the scene boots on the cheap path on every
+   device, and only swaps up once it has proved it can afford the expensive
+   one. Nothing here changes what the bead IS - same physics, same tables -
+   only how finely each loop samples it. */
+uniform int   uSpecN;     // wavelengths actually walked (5 cheap / 9 full)
+uniform int   uSpecSkip;  // stride into the baked table (2 cheap / 1 full)
+uniform vec3  uSpecInv;   // 1/sum of the CIE weights ACTUALLY summed
+uniform int   uBeadSteps; // sphere-trace iterations
+uniform int   uMoteN;     // motes tested
 
 /* The spectral sample set, BAKED. The CIE 1931 colour-matching weights are the
    Wyman/Sloan/Shirley multi-lobe gaussian fit, and SP_K is water's Cauchy index
@@ -682,7 +692,6 @@ uniform vec4  uMote[20];  // dust: xyz = position in the drop (unit ball), w = r
    them live cost 7 exp and a divide EACH, nine times a pixel - which is most of
    why the first version of this scene could not hold a frame rate. Regenerate
    with the snippet in NOTES if the band or the count changes. */
-const int SPECTRAL_N = 9;
 const vec3  SP_C[9] = vec3[9](
   vec3(0.09776, 0.00410, 0.42867), vec3(0.35003, 0.03032, 1.78420),
   vec3(0.09596, 0.14225, 0.78644), vec3(0.02759, 0.55642, 0.13313),
@@ -692,7 +701,6 @@ const vec3  SP_C[9] = vec3[9](
 const float SP_L[9] = float[9](416.1, 448.3, 480.6, 512.8, 545.0, 577.2, 609.4, 641.7, 673.9);
 const float SP_K[9] = float[9](0.009041, 0.006527, 0.004501, 0.002846, 0.001475,
                                0.000327, -0.000643, -0.001471, -0.002183);
-const vec3  SP_INV = vec3(0.302917, 0.302091, 0.317804);   // 1 / sum(SP_C)
 vec3 xyzToRgb(vec3 c){
   return vec3( 3.2406*c.x - 1.5372*c.y - 0.4986*c.z,
               -0.9689*c.x + 1.8758*c.y + 0.0415*c.z,
@@ -735,8 +743,16 @@ vec3 envAt(vec3 d){
        it - that warp IS the look. A rectilinear projection would cover one
        patch and leave the rest of the bead dead. */
     vec2 uvv = vec2(atan(d.x, -d.z)*0.1591549 + 0.5, acos(clamp(d.y,-1.0,1.0))*0.3183099);
+    // a front camera hands you a mirror; flip it back or your reflection in
+    // the bead reaches with the wrong hand
+    if(uVidOn > 1.5) uvv.x = 1.0 - uvv.x;
     vec3 v = texture(uVid, uvv).rgb;
-    return beadEnv(d)*0.25 + v*v*2.2;      // v*v ~ sRGB decode, cheap
+    /* Match the camera to the range the procedural room occupies, whose
+       bright panels sit near 0.5 - the body gain downstream was tuned against
+       that. At the 2.2 this started on, any lit room drove the bead to white;
+       a camera fills the WHOLE sphere with light where the room is mostly
+       dark, so it needs a quarter of the gain, not more. */
+    return beadEnv(d)*0.22 + v*v*0.55;      // v*v ~ sRGB decode, cheap
   }
   return beadEnv(d);
 }
@@ -761,7 +777,7 @@ float beadDust(vec3 A, vec3 B){
   if(len < 1e-5) return 0.0;
   vec3 dir = d / len;
   float acc = 0.0;
-  for(int i = 0; i < MOTE_N; i++){
+  for(int i = 0; i < uMoteN; i++){
     vec4 m = uMote[i];
     // local -> world: v * M is transpose(M) * v, and uRotInv is world -> local
     vec3 rel = (m.xyz * uRotInv) * uRadius - A;
@@ -829,7 +845,7 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
      The tell is a bite missing out of the dent's near rim. */
   float t = tNear;
   bool hit = false;
-  for(int i = 0; i < 52; i++){
+  for(int i = 0; i < uBeadSteps; i++){
     float d = beadD(ro + rd*t);
     if(d < uRadius*0.0012){ hit = true; break; }
     t += d*0.70;
@@ -868,9 +884,10 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
   }
 
   vec3 xyzFilm = vec3(0.0), xyzBody = vec3(0.0);
-  for(int i = 0; i < SPECTRAL_N; i++){
-    float lam = SP_L[i];
-    vec3  cm  = SP_C[i];
+  for(int i = 0; i < uSpecN; i++){
+    int k = i * uSpecSkip;
+    float lam = SP_L[k];
+    vec3  cm  = SP_C[k];
 
     // thin film: pi flip at the top face only, so zero thickness is dark
     float inten = 0.5 - 0.5*cos(6.2831853*opd/lam);
@@ -882,7 +899,7 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
     float trans = 1.0 - inten * uFilm * 0.80;
 
     // body: in one face, straight across, out the other, then look
-    float n = 1.333 + SP_K[i]*uDisp;
+    float n = 1.333 + SP_K[k]*uDisp;
     vec3 rIn = refract(rd, N, 1.0/n);
     float lamCol = 0.0;
     if(dot(rIn, rIn) > 0.0){
@@ -904,8 +921,8 @@ vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
     }
     xyzBody += cm * lamCol * trans;
   }
-  vec3 film = max(xyzToRgb(xyzFilm * SP_INV), 0.0);
-  vec3 body = max(xyzToRgb(xyzBody * SP_INV), 0.0);
+  vec3 film = max(xyzToRgb(xyzFilm * uSpecInv), 0.0);
+  vec3 body = max(xyzToRgb(xyzBody * uSpecInv), 0.0);
 
   /* the film's own reflectance climbs with incidence the same way the surface
      does, so the spectrum lives in the rim and the facing crown stays clear -
@@ -2043,7 +2060,7 @@ void main(){
 
   const U = {};
   ['uRes','uTime','uRadius','uRotInv','uRoll','uMode','uLid','uSquint','uPupil','uNB','uNP',
-   'uPhoto','uMatte','uPhotoOn','uPhotoC','uPhotoS','uNPk','uBg','uTear','uTearRub','uBgColor','uBgTex','uBgMap','uBgLod','uBreath','uEyeOff','uTearDry','uTearC','uEyeGrade','uIris1','uIris2','uSclera','uGlowC','uWarm','uShadeP','uIrisP','uSmoke','uBrim','uTitle','uTitleRect','uTitleOn','uVid','uVidOn','uFilm','uDisp','uBeadMode']
+   'uPhoto','uMatte','uPhotoOn','uPhotoC','uPhotoS','uNPk','uBg','uTear','uTearRub','uBgColor','uBgTex','uBgMap','uBgLod','uBreath','uEyeOff','uTearDry','uTearC','uEyeGrade','uIris1','uIris2','uSclera','uGlowC','uWarm','uShadeP','uIrisP','uSmoke','uBrim','uTitle','uTitleRect','uTitleOn','uVid','uVidOn','uFilm','uDisp','uBeadMode','uSpecN','uSpecSkip','uSpecInv','uBeadSteps','uMoteN']
     .forEach(n => U[n] = gl.getUniformLocation(prog, n));
   U.uMk = gl.getUniformLocation(prog, 'uMk[0]');
   U.uWave = gl.getUniformLocation(prog, 'uWave');
@@ -2112,7 +2129,8 @@ void main(){
      camera runs a face detector and this one does not - it only wants pixels,
      every frame, as fast as they arrive. REPEAT in x because the equirect wrap
      meets itself behind the bead; CLAMP in y so the poles do not smear. */
-  const bead = { on: false, busy: false, stream: null, vid: null, tex: gl.createTexture() };
+  const bead = { on: false, busy: false, stream: null, vid: null, face: 'user',
+                 tex: gl.createTexture() };
   gl.activeTexture(gl.TEXTURE4);
   gl.bindTexture(gl.TEXTURE_2D, bead.tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,0,0,255]));
@@ -2696,12 +2714,19 @@ void main(){
 
   /* the bead's camera. No detector, no model download - just the stream, so it
      comes up in one permission prompt and a frame or two. */
-  async function beadCamStart(){
+  /* The button CYCLES: off -> front -> rear -> off. A phone has two cameras
+     and only one button here, and which one you want depends entirely on what
+     you are pointing it at, so guessing is worse than cycling. Front first:
+     the thing most people reach for a reflective object to do is look at
+     themselves in it. */
+  async function beadCamStart(face){
     if (bead.busy) return;
     bead.busy = true; camBtn.classList.add('busy');
     try {
+      if (bead.stream) bead.stream.getTracks().forEach(t => t.stop());
+      bead.face = face;
       bead.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: { facingMode: face, width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false
       });
       const v = document.createElement('video');
@@ -2711,7 +2736,9 @@ void main(){
       bead.vid = v;
       bead.on = true;
       camBtn.classList.add('on');
-      showHint('The bead is looking at the room');
+      camBtn.classList.toggle('rear', face === 'environment');
+      showHint(face === 'user' ? 'Front camera \u00b7 tap again for the rear'
+                               : 'Rear camera \u00b7 tap again to stop');
     } catch (err) {
       showHint('Camera unavailable');
       beadCamStop();
@@ -2720,7 +2747,8 @@ void main(){
   }
   function beadCamStop(){
     bead.on = false;
-    camBtn.classList.remove('on');
+    bead.face = 'user';
+    camBtn.classList.remove('on', 'rear');
     if (bead.stream) bead.stream.getTracks().forEach(t => t.stop());
     bead.stream = null; bead.vid = null;
   }
@@ -2735,7 +2763,13 @@ void main(){
   camBtn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
     // one button, two scenes: the eye wants a face, the bead wants the room
-    if (mode === 4){ bead.on || bead.busy ? beadCamStop() : beadCamStart(); return; }
+    if (mode === 4){
+      if (bead.busy) return;
+      if (!bead.on) beadCamStart('user');
+      else if (bead.face === 'user') beadCamStart('environment');
+      else beadCamStop();
+      return;
+    }
     gaze.on || gaze.busy ? gazeStop() : gazeStart();
   });
   let gazeLast = 0;
@@ -3079,6 +3113,39 @@ void main(){
   };
   window.addEventListener('pointerup', release);
   window.addEventListener('pointercancel', release);
+
+  /* ---------------- bead quality: mobile first, desktop earns the upgrade ----
+     The expensive path is reserved for desktop, but nothing SNIFFS for one.
+     Every device boots on the cheap tier and the scene measures itself; the
+     swap happens only once two things agree — the input looks desktop-class
+     (a fine pointer that can hover, which no phone reports) AND the measured
+     frame cost leaves real headroom. A user-agent test would hand the heavy
+     path to a cheap laptop on battery and withhold it from a fast tablet, and
+     measuring is the only way to be right about a machine you have never seen.
+
+     It only ever ratchets UP. Measuring continuously and swapping both ways
+     makes the bead visibly change grade whenever something else on the machine
+     gets busy, which is worse than simply being coarse. */
+  const BEAD_Q = {
+    lo: { specN: 5, skip: 2, inv: [0.618793, 0.601488, 0.813906], steps: 36, motes: 12 },
+    hi: { specN: 9, skip: 1, inv: [0.302917, 0.302091, 0.317804], steps: 52, motes: 20 },
+  };
+  // ?q=hi / ?q=lo pins a tier, for grading the two against each other
+  const qPin = (location.search.match(/[?&]q=(hi|lo)/) || [])[1];
+  let beadQ = qPin ? BEAD_Q[qPin] : BEAD_Q.lo, beadProbe = null;
+  const deskClass = window.matchMedia &&
+                    window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  function beadQualityStep(now, dt){
+    if (qPin || beadQ === BEAD_Q.hi || !deskClass) return;
+    if (!beadProbe) beadProbe = { t0: now, n: 0, sum: 0 };
+    if (now - beadProbe.t0 < 700) return;          // let the first frames settle
+    beadProbe.n++; beadProbe.sum += dt;
+    if (beadProbe.n < 45) return;
+    // 45 frames of the cheap tier: swap up only with room to spare, since the
+    // full path is roughly twice the work
+    if (beadProbe.sum / beadProbe.n < 0.0105) beadQ = BEAD_Q.hi;
+    else beadProbe = { t0: now, n: 0, sum: 0 };    // busy right now; ask again
+  }
 
   /* ---------------- the dust inside the bead ----------------
      Twenty motes drifting in the drop's own frame, so rolling the bead carries
@@ -3671,7 +3738,8 @@ void main(){
     gl.uniform1f(U.uMode, mode);
     if (mode === 4){
       beadCamStep();
-      gl.uniform1f(U.uVidOn, bead.on ? 1 : 0);
+      // 2 = front camera, which the shader un-mirrors; 1 = rear; 0 = off
+      gl.uniform1f(U.uVidOn, bead.on ? (bead.face === 'user' ? 2 : 1) : 0);
       /* uFilm 0 = clean water, nothing but a dispersed highlight; 1 = fully
          soaped. 0.85 is where the orders read on a phone without the bead
          turning into an oil slick. uDisp 1 is water's real 0.006 spread, which
@@ -3683,6 +3751,12 @@ void main(){
       gl.uniform4f(U.uBeadMode,
         0.0070*Math.sin(bt*1.10),       0.0052*Math.sin(bt*0.83 + 1.7),
         0.0040*Math.sin(bt*1.47 + 0.4), 0.0026*Math.sin(bt*1.91 + 2.3));
+      beadQualityStep(now, dt);
+      gl.uniform1i(U.uSpecN, beadQ.specN);
+      gl.uniform1i(U.uSpecSkip, beadQ.skip);
+      gl.uniform3fv(U.uSpecInv, beadQ.inv);
+      gl.uniform1i(U.uBeadSteps, beadQ.steps);
+      gl.uniform1i(U.uMoteN, beadQ.motes);
       beadPokeStep(dt);
       moteStep(dt, bt);
     } else {
