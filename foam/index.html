@@ -39,6 +39,17 @@
     transition: color 0.35s ease, background 0.35s ease;
   }
   .tab.on { color: rgba(0,0,0,0.85); background: rgba(255,255,255,0.92); }
+  /* Seven pills at this tracking measure 573px, so the bar hung off BOTH edges
+     of every phone - it was already over at six and Bead made it worse. The
+     letter-spacing is most of that width, so it goes first; below 400 the
+     padding follows. The bar is centred by a translate, so it cannot simply
+     scroll - it has to fit. */
+  @media (max-width: 560px){
+    .tab { letter-spacing: 0.10em; padding: 10px 9px 9px 10px; }
+  }
+  @media (max-width: 400px){
+    .tab { letter-spacing: 0.05em; padding: 9px 7px 8px 8px; font-size: 9.5px; }
+  }
   #bgbar {
     position: fixed; top: calc(72px + env(safe-area-inset-top)); left: 50%;
     transform: translateX(-50%);
@@ -121,7 +132,7 @@
     backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
     cursor: pointer; z-index: 12;
   }
-  body.chrome.eye #cam { display: flex; }
+  body.chrome.eye #cam, body.chrome.bead #cam { display: flex; }
   #cam svg { width: 19px; height: 19px; }
   #cam .cs { fill: none; stroke: rgba(255,255,255,0.72); stroke-width: 1.5; stroke-linejoin: round; }
   #cam.on { background: rgba(255,255,255,0.92); border-color: #fff; }
@@ -314,7 +325,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = 'ea62f6fa41';
+  var BUILD = '7dce22be42';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -339,6 +350,7 @@
   <div class="tab" data-mode="1">Eye</div>
   <div class="tab" data-mode="2">Foam</div>
   <div class="tab" data-mode="3">Mask</div>
+  <div class="tab" data-mode="4">Bead</div>
   <div class="tab" data-href="/fly">Fly</div>
   <div class="tab" data-href="/office">Office</div>
 </div>
@@ -617,6 +629,223 @@ vec3 shadeMarble(vec3 ro, vec3 rd, float tHit, float tExit){
   col += pow(clamp(dot(R, L1), 0.0, 1.0), 700.0) * 3.2 * vec3(1.0, 0.99, 0.95);
   col += pow(clamp(dot(R, L1), 0.0, 1.0), 90.0)  * 0.30;
   col += pow(clamp(dot(R, L2), 0.0, 1.0), 400.0) * 0.9 * vec3(0.75, 0.84, 1.0);
+  return col;
+}
+
+/* ============================ MODE 4 · the water bead ============================
+   A bead of water the same size as the marble, on the same pure black, and the
+   whole point of it is COLOUR — so this scene is spectral, not RGB.
+
+   Two different physics make the spectrum, and they look nothing alike:
+
+   · DISPERSION. Water's index runs 1.3372 (blue) to 1.3312 (red) — a Cauchy
+     fit, n = 1.3239 + 3141/lambda^2, nm. That is a spread of 0.006 across the
+     whole visible band, which is next to nothing: left at 1.0 it shows only as
+     a hairline of colour on the caustic edges. It is real, it is the reason
+     rainbows exist, and on a 1-inch bead it is almost invisible. uDisp
+     exaggerates the spread about the green index so it reads on a phone.
+   · THIN FILM. This is where the full spectrum comes from. A clean water bead
+     has none; a bead with any surfactant on it carries a film a few hundred nm
+     thick, and that film interferes with itself — the same physics as a soap
+     bubble or the rainbow on a puddle. Two-beam interference, with the pi
+     phase flip at the air/film face, over a thickness that drains downward
+     under gravity and drifts. 180-900 nm covers the saturated low orders.
+
+   Both are evaluated in ONE loop over SPECTRAL_N wavelengths and converted to
+   RGB through the CIE 1931 observer, so the colour is derived rather than
+   painted. The CIE fit is the Wyman/Sloan/Shirley multi-lobe gaussian. Paint
+   the spectrum as a hue ramp instead and the bands come out evenly spaced,
+   which is the tell: real interference crowds the orders together as they go
+   up, and the greens are wide while the magentas are narrow.
+
+   The bead is a raymarched SDF, not an analytic sphere, because water is not a
+   sphere: it rings in its l=2 surface-tension modes. The modes are the real
+   ones (the quadrupole set), kept BELOW 1% of the radius: a drop this size is
+   held spherical by its own surface tension, so a visible squash reads as
+   jelly rather than water. At 2% the silhouette measured 793x840 — 6% out of
+   round, which is not a perfect bead. It is a shimmer, not a wobble. Marching is
+   bounded by the analytic sphere so empty pixels cost one quadratic. */
+uniform sampler2D uVid;   // live camera, equirect-wrapped onto the bead
+uniform float uVidOn;
+uniform float uFilm;      // thin-film strength 0..1
+uniform float uDisp;      // dispersion gain, 1 = physical
+
+/* CIE 1931 colour matching, multi-lobe gaussian fit (Wyman, Sloan & Shirley) */
+float cieG(float x, float m, float s1, float s2){
+  float t = (x - m) * (x < m ? 1.0/s1 : 1.0/s2);
+  return exp(-0.5*t*t);
+}
+vec3 cieXYZ(float l){
+  return vec3(
+    1.056*cieG(l,599.8,37.9,31.0) + 0.362*cieG(l,442.0,16.0,26.7) - 0.065*cieG(l,501.1,20.4,26.2),
+    0.821*cieG(l,568.8,46.9,40.5) + 0.286*cieG(l,530.9,16.3,31.1),
+    1.217*cieG(l,437.0,11.8,36.0) + 0.681*cieG(l,459.0,26.0,13.8));
+}
+vec3 xyzToRgb(vec3 c){
+  return vec3( 3.2406*c.x - 1.5372*c.y - 0.4986*c.z,
+              -0.9689*c.x + 1.8758*c.y + 0.0415*c.z,
+               0.0557*c.x - 0.2040*c.y + 1.0570*c.z);
+}
+float waterIOR(float lam){
+  float n = 1.3239 + 3141.0/(lam*lam);
+  return 1.333 + (n - 1.333) * uDisp;      // exaggerate about the green index
+}
+
+/* the environment the bead looks at: the lightbox, plus the camera when it is
+   on. Equirect so a 60-degree webcam wraps the whole ball and warps doing it -
+   that smearing IS the look; a rectilinear projection would only cover a patch
+   and leave the rest of the bead dead. */
+vec3 beadEnv(vec3 d){
+  /* A drop is a LENS. Against a void it has nothing to image, and a lens with
+     nothing to image is a black disc - which is exactly what this scene drew
+     before this function existed. So the bead gets a room of its own: hard-
+     edged panels, because dispersion only shows on an EDGE. A smooth gradient,
+     however bright, splits into nothing. The camera replaces this when it is
+     on, and it is built to preview what that will look like. */
+  // ripple the lookup so the panels read as a room rather than as three
+  // rectangles - the edges stay hard enough to disperse, they just stop being
+  // straight
+  d = normalize(d + 0.055*vec3(noise3(d*3.1), noise3(d*3.1 + 7.7), noise3(d*3.1 + 19.3)) - 0.0275);
+  vec3 c = vec3(0.008, 0.010, 0.014);
+  float box  = smoothstep(0.28, 0.44, d.y) * smoothstep(0.80, 0.52, abs(d.x));
+  c += box * vec3(0.50, 0.54, 0.62);                       // overhead softbox
+  float warm = smoothstep(0.08, 0.36, -d.x) * smoothstep(0.50, 0.08, abs(d.y + 0.18));
+  c += warm * vec3(1.10, 0.62, 0.24) * 0.34;               // warm panel, low left
+  float cool = smoothstep(0.18, 0.52, d.x) * smoothstep(0.62, 0.16, abs(d.y - 0.12));
+  c += cool * vec3(0.24, 0.50, 1.15) * 0.28;               // cool rake, right
+  // small brilliants: points for the dispersion to prise apart
+  c += smoothstep(0.88, 0.995, noise3(d*7.0 + 11.3)) * vec3(1.0, 0.98, 0.95) * 1.1;
+  return c;
+}
+vec3 envAt(vec3 d){
+  if(uVidOn > 0.5){
+    /* equirect, so a 60-degree camera wraps the whole ball and smears doing
+       it - that warp IS the look. A rectilinear projection would cover one
+       patch and leave the rest of the bead dead. */
+    vec2 uvv = vec2(atan(d.x, -d.z)*0.1591549 + 0.5, acos(clamp(d.y,-1.0,1.0))*0.3183099);
+    vec3 v = texture(uVid, uvv).rgb;
+    return beadEnv(d)*0.25 + v*v*2.2;      // v*v ~ sRGB decode, cheap
+  }
+  return beadEnv(d);
+}
+
+/* l=2 surface-tension modes - how a real drop rings. Amplitudes stay ~2% or it
+   stops reading as water held by its own surface and starts reading as jelly. */
+float beadD(vec3 p){
+  float r = length(p);
+  vec3 n = p / max(r, 1e-5);
+  float w = 0.0070*sin(uTime*1.10)       * (3.0*n.y*n.y - 1.0)
+          + 0.0052*sin(uTime*0.83 + 1.7) * (n.x*n.x - n.z*n.z)
+          + 0.0040*sin(uTime*1.47 + 0.4) * (n.x*n.z)
+          + 0.0026*sin(uTime*1.91 + 2.3) * (n.y*n.z);
+  return r - uRadius*(1.0 + w);
+}
+vec3 beadN(vec3 p){
+  vec2 e = vec2(uRadius*0.004, 0.0);
+  return normalize(vec3(beadD(p+e.xyy) - beadD(p-e.xyy),
+                        beadD(p+e.yxy) - beadD(p-e.yxy),
+                        beadD(p+e.yyx) - beadD(p-e.yyx)));
+}
+
+vec3 shadeBead(vec3 ro, vec3 rd, float tNear, float tFar){
+  /* march the wobble inside the bounding sphere */
+  float t = tNear;
+  bool hit = false;
+  for(int i = 0; i < 48; i++){
+    float d = beadD(ro + rd*t);
+    if(d < uRadius*0.0012){ hit = true; break; }
+    t += d;
+    if(t > tFar) break;
+  }
+  if(!hit) return vec3(0.0);
+
+  vec3 P = ro + rd*t;
+  vec3 N = beadN(P);
+  float cosI = clamp(dot(-rd, N), 0.0, 1.0);
+  float F = 0.020 + 0.980*pow(1.0 - cosI, 5.0);     // water, F0 = 0.02
+
+  /* film thickness: drains downward under gravity, and the drainage front
+     creeps. Thin at the crown, piling up round the equator and below. */
+  float drain = 0.5 - 0.5*N.y;
+  float thick = 170.0 + 560.0*drain*drain
+              + 150.0*fbm3(N*2.6 + vec3(0.0, uTime*0.055, uTime*0.031))
+              - 60.0*sin(uTime*0.21 + N.y*3.0);
+  float nf = 1.35;                                   // the film, not the bulk
+  float sinT = sqrt(max(0.0, 1.0 - cosI*cosI)) / nf;
+  float cosT = sqrt(max(0.0, 1.0 - sinT*sinT));
+  float opd  = 2.0*nf*thick*cosT;
+
+  /* one spectral loop does both jobs: interference in the film, and a
+     dispersed ray through the body of the drop. */
+  const int SPECTRAL_N = 14;
+  vec3 xyzFilm = vec3(0.0), xyzBody = vec3(0.0), wsum = vec3(0.0);
+  for(int i = 0; i < SPECTRAL_N; i++){
+    float lam = 400.0 + (690.0 - 400.0) * (float(i) + 0.5) / float(SPECTRAL_N);
+    vec3  cm  = cieXYZ(lam);
+    wsum += cm;
+
+    // thin film: pi flip at the top face only, so zero thickness is dark
+    float inten = 0.5 - 0.5*cos(6.2831853*opd/lam);
+    xyzFilm += cm * inten;
+    // whatever the film reflects it takes OUT of what goes through, so the
+    // body carries the exact complement of the skin. Energy conservation is
+    // doing the art direction here: it is why the caustic under a soap film
+    // goes gold where the film above it goes blue.
+    float trans = 1.0 - inten * uFilm * 0.80;
+
+    // body: in one face, straight across, out the other, then look
+    float n = waterIOR(lam);
+    vec3 rIn = refract(rd, N, 1.0/n);
+    float lamCol = 0.0;
+    if(dot(rIn, rIn) > 0.0){
+      // the wobble is ~2%, so the exit face is the bounding sphere to within a
+      // pixel - solve it analytically instead of marching it again
+      float b2 = dot(P, rIn);
+      float c2 = dot(P, P) - uRadius*uRadius;
+      float s2 = sqrt(max(b2*b2 - c2, 0.0));
+      vec3 Pe = P + rIn*(-b2 + s2);
+      vec3 Ne = normalize(Pe);
+      vec3 rOut = refract(rIn, -Ne, n);
+      if(dot(rOut, rOut) < 1e-6) rOut = reflect(rIn, Ne);   // TIR
+      /* the drop is a lens: it shows an INVERTED image of whatever is around
+         it, focused hard. Against a void that is three small lights, so what
+         you get is a few brilliant points, prised apart by wavelength. Gain
+         it up or a bead on black is just a black disc with a wet edge. */
+      vec3 s = envAt(rOut) * 2.0;
+      lamCol = dot(s, vec3(0.299, 0.587, 0.114));
+    }
+    xyzBody += cm * lamCol * trans;
+  }
+  vec3 inv = 1.0 / max(wsum, vec3(1e-4));
+  vec3 film = max(xyzToRgb(xyzFilm * inv), 0.0);
+  vec3 body = max(xyzToRgb(xyzBody * inv), 0.0);
+
+  /* the film's own reflectance climbs with incidence the same way the surface
+     does, so the spectrum lives in the rim and the facing crown stays clear -
+     exactly where you see it on a real bubble. */
+  /* Interference MODULATES the reflected light, it does not add to it: the
+     reflectance at each wavelength is R(lambda), so the film colour multiplies
+     whatever the surface is reflecting. Add it instead and the bands glow in
+     directions facing nothing, which is the giveaway of a painted-on rainbow. */
+  vec3 refl = envAt(reflect(rd, N));
+  float rl = dot(refl, vec3(0.299, 0.587, 0.114));
+  float filmAmt = uFilm * (0.38 + 0.62*pow(1.0 - cosI, 1.5));
+  vec3 spec = mix(refl, film * rl * 3.6, filmAmt);
+
+  vec3 col = mix(body*0.92, spec, F);
+
+  // water is thin and bright at the edge, not dense like glass
+  float rim = pow(1.0 - cosI, 4.0);
+  col += rim * film * uFilm * rl * 1.5;
+  col += rim * vec3(0.40, 0.46, 0.58) * 0.16;
+
+  // the two key lights, hard - a droplet's giveaway is its tiny specular
+  vec3 L1 = normalize(vec3(-0.55, 0.62, 0.55));
+  vec3 L2 = normalize(vec3(0.62, -0.28, 0.60));
+  vec3 R  = reflect(rd, N);
+  col += pow(clamp(dot(R, L1), 0.0, 1.0), 900.0) * 3.6 * vec3(1.0, 0.99, 0.96);
+  col += pow(clamp(dot(R, L1), 0.0, 1.0), 110.0) * 0.22;
+  col += pow(clamp(dot(R, L2), 0.0, 1.0), 520.0) * 1.0 * vec3(0.76, 0.85, 1.0);
   return col;
 }
 
@@ -1673,9 +1902,20 @@ void main(){
   } else if(uMode < 2.5){
     /* ---------------- FOAM ---------------- */
     col = shadeFoam(uv);
-  } else {
+  } else if(uMode < 3.5){
     /* ---------------- MASK ---------------- */
     col = shadeMask(uv);
+  } else {
+    /* ---------------- BEAD ---------------- */
+    col = vec3(0.0);                       // pure black, same void as the marble
+    // bound the march: the wobble never exceeds 2% of R
+    float cB = dot(ro, ro) - uRadius*uRadius*1.0609;
+    float dB = b*b - cB;
+    if(dB > 0.0){
+      float sq = sqrt(dB);
+      vec3 beadCol = shadeBead(ro, rd, max(-b - sq, 0.0), -b + sq);
+      col = beadCol;
+    }
   }
 
   col = col / (1.0 + col*0.35);
@@ -1714,7 +1954,7 @@ void main(){
 
   const U = {};
   ['uRes','uTime','uRadius','uRotInv','uRoll','uMode','uLid','uSquint','uPupil','uNB','uNP',
-   'uPhoto','uMatte','uPhotoOn','uPhotoC','uPhotoS','uNPk','uBg','uTear','uTearRub','uBgColor','uBgTex','uBgMap','uBgLod','uBreath','uEyeOff','uTearDry','uTearC','uEyeGrade','uIris1','uIris2','uSclera','uGlowC','uWarm','uShadeP','uIrisP','uSmoke','uBrim','uTitle','uTitleRect','uTitleOn']
+   'uPhoto','uMatte','uPhotoOn','uPhotoC','uPhotoS','uNPk','uBg','uTear','uTearRub','uBgColor','uBgTex','uBgMap','uBgLod','uBreath','uEyeOff','uTearDry','uTearC','uEyeGrade','uIris1','uIris2','uSclera','uGlowC','uWarm','uShadeP','uIrisP','uSmoke','uBrim','uTitle','uTitleRect','uTitleOn','uVid','uVidOn','uFilm','uDisp']
     .forEach(n => U[n] = gl.getUniformLocation(prog, n));
   U.uMk = gl.getUniformLocation(prog, 'uMk[0]');
   U.uWave = gl.getUniformLocation(prog, 'uWave');
@@ -1774,6 +2014,20 @@ void main(){
   gl.uniform1i(U.uMatte, 1);
   gl.uniform1i(U.uBgTex, 2);
   gl.uniform1i(U.uTitle, 3);
+  gl.uniform1i(U.uVid, 4);
+
+  /* the bead's camera feed. Its own texture unit and its own stream: the eye's
+     camera runs a face detector and this one does not - it only wants pixels,
+     every frame, as fast as they arrive. REPEAT in x because the equirect wrap
+     meets itself behind the bead; CLAMP in y so the poles do not smear. */
+  const bead = { on: false, busy: false, stream: null, vid: null, tex: gl.createTexture() };
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, bead.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0,0,0,255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
   /* ---------------- the one-sheet's title, as a texture ----------------
      It has to be INSIDE the render, not DOM over it: the smoke is drawn in
@@ -1917,11 +2171,14 @@ void main(){
     }
     document.body.classList.toggle('foam', mode === 2);
     document.body.classList.toggle('eye', mode === 1);
+    document.body.classList.toggle('bead', mode === 4);
     if (mode !== 1 && gaze.on) gazeStop();
+    if (mode !== 4 && bead.on) beadCamStop();
     if (mode === 3){
       if (!maskC.inited) maskInit();
       showHint('Drag the mask \u00b7 tilt to sway');
     }
+    if (mode === 4) showHint('Camera reflects the room');
   }
   tabs.forEach(t => t.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
@@ -1937,7 +2194,7 @@ void main(){
   {
     const path = location.pathname.toLowerCase();
     const qs = (location.search.match(/mode=([a-z]+)/) || [])[1];
-    const seg = (path.match(/\/(glass|eye|foam|mask)\/?$/) || [])[1];
+    const seg = (path.match(/\/(glass|eye|foam|mask|bead)\/?$/) || [])[1];
     // face-locked solo routes: /her /bun /wyrm /gold /tex (or ?face=bun) boot the
     // eye on that one face, zero chrome - for hosting a single face as an artifact.
     const FMAP = { her: 0, bun: 1, wyrm: 2, gold: 3, tex: 4 };
@@ -1947,7 +2204,7 @@ void main(){
                   || (path.match(/\/(her|bun|wyrm|gold|tex)\/?$/) || [])[1]
                   || (location.search.match(/face=([a-z]+)/) || [])[1];
     const solo = qs || seg || (FMAP[faceName] !== undefined ? 'eye' : undefined);
-    const MAP = { glass: 0, eye: 1, foam: 2, mask: 3 };
+    const MAP = { glass: 0, eye: 1, foam: 2, mask: 3, bead: 4 };
     if (solo && MAP[solo] !== undefined){
       document.body.classList.add('solo');
       const lockFace = FMAP[faceName];
@@ -2345,8 +2602,48 @@ void main(){
   addEventListener('orientationchange', () => setTimeout(fitBill, 120));
   requestAnimationFrame(() => requestAnimationFrame(fitBill));
 
+  /* the bead's camera. No detector, no model download - just the stream, so it
+     comes up in one permission prompt and a frame or two. */
+  async function beadCamStart(){
+    if (bead.busy) return;
+    bead.busy = true; camBtn.classList.add('busy');
+    try {
+      bead.stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false
+      });
+      const v = document.createElement('video');
+      v.autoplay = true; v.playsInline = true; v.muted = true;
+      v.srcObject = bead.stream;
+      await v.play();
+      bead.vid = v;
+      bead.on = true;
+      camBtn.classList.add('on');
+      showHint('The bead is looking at the room');
+    } catch (err) {
+      showHint('Camera unavailable');
+      beadCamStop();
+    }
+    bead.busy = false; camBtn.classList.remove('busy');
+  }
+  function beadCamStop(){
+    bead.on = false;
+    camBtn.classList.remove('on');
+    if (bead.stream) bead.stream.getTracks().forEach(t => t.stop());
+    bead.stream = null; bead.vid = null;
+  }
+  function beadCamStep(){
+    if (!bead.on || !bead.vid || bead.vid.readyState < 2) return;
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, bead.tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bead.vid);
+  }
+
   camBtn.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
+    // one button, two scenes: the eye wants a face, the bead wants the room
+    if (mode === 4){ bead.on || bead.busy ? beadCamStop() : beadCamStart(); return; }
     gaze.on || gaze.busy ? gazeStop() : gazeStart();
   });
   let gazeLast = 0;
@@ -3162,6 +3459,19 @@ void main(){
     gl.uniform1f(U.uRadius, mode === 1 ? eyeR*adj(faceId).es : radius);
     gl.uniform1f(U.uRoll, rollAccum);
     gl.uniform1f(U.uMode, mode);
+    if (mode === 4){
+      beadCamStep();
+      gl.uniform1f(U.uVidOn, bead.on ? 1 : 0);
+      /* uFilm 0 = clean water, nothing but a dispersed highlight; 1 = fully
+         soaped. 0.85 is where the orders read on a phone without the bead
+         turning into an oil slick. uDisp 1 is water's real 0.006 spread, which
+         is invisible at this size - 7 puts the fringes where the eye expects
+         a prism to put them. Both are honest about being a choice. */
+      gl.uniform1f(U.uFilm, 0.85);
+      gl.uniform1f(U.uDisp, 7.0);
+    } else {
+      gl.uniform1f(U.uVidOn, 0);
+    }
     gl.uniform1f(U.uLid, lid);
     gl.uniform1f(U.uSquint, squint);
     const hippus = mode === 1
