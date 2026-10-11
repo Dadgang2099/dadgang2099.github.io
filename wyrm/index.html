@@ -352,7 +352,7 @@
    deliberately left in the address bar - stripping it would send the next
    plain reload straight back to the cached copy. */
 (function(){
-  var BUILD = 'd5f8372573';
+  var BUILD = '5146475f31';
   // empty = a standalone bundle with no site to check against; '{' = an
   // unbuilt source file opened directly. Neither should ever reload.
   if (!BUILD || BUILD.charAt(0) === '{') return;
@@ -704,7 +704,7 @@ uniform float uDisp;      // dispersion gain, 1 = physical
 uniform vec4  uBPoke[3];  // touch: xyz = dent axis (unit), w = depth
 uniform vec4  uBPokeB[3]; // x = ripple amp, y = ripple age (s), z = angular radius
 uniform vec4  uBeadMode;  // the four l=2 surface-tension amplitudes, this frame
-uniform vec4  uMote[48];  // dust: xyz = position in the drop (unit ball), w = radius
+uniform vec4  uMote[48];  // dust: xyz = position in the drop (unit ball), w = size 0..1
 /* Quality tier. MOBILE FIRST: the scene boots on the cheap path on every
    device, and only swaps up once it has proved it can afford the expensive
    one. Nothing here changes what the bead IS - same physics, same tables -
@@ -826,12 +826,25 @@ float beadDust(vec3 A, vec3 B){
        device that matters most. 1.25 keeps the big ones clearly brighter than
        the small ones, which is the random-scale look, without the bottom of
        the distribution disappearing. A legibility choice, not physics. */
-    float rw = uRadius * m.w;                 // what the mote actually is
-    float re = max(rw, pxW * 0.85);           // what can be drawn
+    /* m.w is the mote's SIZE PARAMETER, 0..1, not its radius - one float
+       carries its whole character, and the shader turns it into both how big
+       the fleck is and how much light it carries. Size drives opacity across
+       the entire range, not only below a pixel: with the clamp alone every
+       mote above a pixel rendered flat out, which is what made the big ones
+       read as hard white dots. And the top of the ramp stops at 0.50, so no
+       fleck is ever opaque - they are specks suspended in water, and you
+       should always be seeing some of the water through them. */
+    float sz = m.w;
+    float rw = uRadius * (0.0010 + 0.0055*sz);   // what the mote actually is
+    float re = max(rw, pxW * 0.85);              // what can be drawn
+    float a  = mix(0.07, 0.50, sz) * (0.72 + 0.28*fract(sz*1237.0));
     float r  = length(rel - dir*t) / re;
-    acc += exp(-r*r*2.3) * pow(rw/re, 1.25);
+    // the sub-pixel term is linear now, not ^1.25 - the opacity ramp above
+    // already does the "smaller is fainter" job, and compounding the two
+    // erased the bottom of the distribution entirely
+    acc += exp(-r*r*2.3) * (rw/re) * a;
   }
-  return min(acc, 1.2);
+  return min(acc, 0.72);     // even a cluster of overlapping flecks stays sheer
 }
 
 /* A finger in water. The dent is a gaussian pressed along one axis; the water
@@ -3254,12 +3267,12 @@ void main(){
     while (x*x + y*y + z*z > 1);
     const s = 0.86;
     motes.push({ x: x*s, y: y*s, z: z*s,
-                 /* Tiny, and tiny in a RANDOM way: a squared distribution
-                    puts most flecks at the floor and lets a few be several
-                    times bigger, which is what a suspension looks like. The
-                    old 0.010-0.026 was 6-16 px on a phone - beads of oil, not
-                    dust. This is 0.3-2.4 px. */
-                 r: 0.0010 + 0.0055*Math.pow(Math.random(), 2.0),
+                 /* ONE size parameter, 0..1, squared so most flecks sit at
+                    the floor and a few are several times bigger - what a
+                    suspension looks like. The shader turns it into both the
+                    radius (0.0010-0.0065 of R, i.e. 0.3-2.4 px on a phone) and
+                    the opacity, so the two can never drift apart. */
+                 s: Math.pow(Math.random(), 2.0),
                  vy: -(0.006 + Math.random()*0.012),
                  ph: Math.random()*6.283, sp: 0.19 + Math.random()*0.33 });
   }
@@ -3273,7 +3286,7 @@ void main(){
         const a = Math.random()*6.283, rr = Math.sqrt(Math.random())*0.72;
         m.x = Math.cos(a)*rr; m.z = Math.sin(a)*rr; m.y = 0.80;
       }
-      moteArr[i*4] = m.x; moteArr[i*4+1] = m.y; moteArr[i*4+2] = m.z; moteArr[i*4+3] = m.r;
+      moteArr[i*4] = m.x; moteArr[i*4+1] = m.y; moteArr[i*4+2] = m.z; moteArr[i*4+3] = m.s;
     }
     gl.uniform4fv(U.uMote, moteArr);
   }
